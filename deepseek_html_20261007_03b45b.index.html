@@ -1,0 +1,1268 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Мониторинг — Киев</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+  body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; -webkit-text-size-adjust: 100%; }
+  #map { position: absolute; top: 0; left: 0; right: 0; bottom: 0; }
+  #panel {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 1000;
+    background: rgba(0,0,0,0.92); color: #fff;
+    padding: 10px 14px 12px;
+    padding-top: calc(10px + env(safe-area-inset-top, 0));
+    font-size: 14px; line-height: 1.4;
+    max-height: 60vh; overflow: hidden;
+    border-bottom-left-radius: 16px; border-bottom-right-radius: 16px;
+    transition: transform 0.3s ease, max-height 0.3s ease;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.6);
+  }
+  #panel.collapsed { transform: translateY(calc(-100% + 44px + env(safe-area-inset-top, 0))); max-height: none; }
+  #panel.collapsed .tabs, #panel.collapsed #list { display: none; }
+  #panel .header { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 32px; }
+  #panel .title { font-weight: 700; color: #ffcc00; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  #panel .btn { background: rgba(255,255,255,0.22); color: #fff; border: none; border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; flex-shrink: 0; -webkit-tap-highlight-color: transparent; transition: background 0.15s; }
+  #panel .btn:active { background: rgba(255,255,255,0.4); }
+  #panel .btn.spinning { animation: spin 1s linear infinite; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  #panel .meta { font-size: 11px; color: #bbb; margin-top: 4px; }
+  #panel .tabs { display: flex; gap: 6px; margin-top: 8px; }
+  #panel .tab { flex: 1; padding: 7px 6px; border-radius: 8px; font-size: 12px; background: rgba(255,255,255,0.12); color: #eee; border: none; cursor: pointer; -webkit-tap-highlight-color: transparent; white-space: nowrap; }
+  #panel .tab.active { background: #0088cc; color: #fff; font-weight: 600; }
+  #list { margin-top: 10px; max-height: calc(60vh - 140px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .row { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; font-size: 13px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; margin-top: 3px; box-shadow: 0 0 6px currentColor; }
+  .row-text { flex: 1; word-wrap: break-word; }
+  .row-title { font-weight: 700; }
+  .row-sub { color: #eee; font-size: 12px; }
+  .target-icon { display: flex; flex-direction: column; align-items: center; pointer-events: auto; }
+  .target-icon svg { display: block; }
+  .target-icon .label { font-size: 11px; font-weight: 800; text-align: center; white-space: nowrap; margin-top: -2px; color: #fff !important; text-shadow: 0 0 4px #000, 0 0 4px #000, 0 0 4px #000; -webkit-text-stroke: 0.5px #000; }
+  .event-icon { display: flex; flex-direction: column; align-items: center; pointer-events: auto; }
+  .event-icon .emoji { font-size: 24px; line-height: 1; filter: drop-shadow(0 0 5px rgba(0,0,0,1)) drop-shadow(0 0 2px #fff); }
+  .event-icon.archived .emoji { opacity: 0.5; filter: grayscale(0.8); }
+  .event-icon .label { font-size: 10px; font-weight: 800; text-align: center; white-space: nowrap; margin-top: -2px; color: #fff !important; text-shadow: 0 0 4px #000, 0 0 4px #000, 0 0 4px #000; -webkit-text-stroke: 0.5px #000; }
+  .leaflet-popup-content-wrapper { border-radius: 12px; background: #1a1a1a; color: #fff; }
+  .leaflet-popup-tip { background: #1a1a1a; }
+  .leaflet-popup-close-button { color: #fff !important; }
+  .history-popup { font-size: 12px; max-height: 260px; overflow-y: auto; -webkit-overflow-scrolling: touch; color: #fff; }
+  .history-popup .entry { border-bottom: 1px solid #333; padding: 7px 0; }
+  .history-popup .entry:last-child { border-bottom: none; }
+  .history-popup .time { color: #aaa; font-size: 11px; }
+  .history-popup .route { color: #fff; font-weight: 700; margin-top: 2px; }
+  .history-popup .src { color: #ccc; font-size: 11px; margin-top: 3px; font-style: italic; }
+  .history-popup .empty { color: #999; font-style: italic; }
+  #status { position: absolute; bottom: calc(14px + env(safe-area-inset-bottom, 0)); left: 14px; right: 14px; z-index: 1000; background: rgba(0,0,0,0.85); color: #fff; padding: 10px 14px; border-radius: 10px; font-size: 12px; text-align: center; pointer-events: none; opacity: 0; transition: opacity 0.3s; }
+  #status.show { opacity: 1; }
+  #status.err { background: rgba(200,30,30,0.95); }
+</style>
+</head>
+<body>
+<div id="panel" class="collapsed">
+  <div class="header">
+    <div class="title" id="panelTitle">📡 Загрузка...</div>
+    <button class="btn" id="refreshBtn" title="Обновить">🔄</button>
+    <button class="btn" id="toggleBtn">Открыть</button>
+  </div>
+  <div class="meta" id="panelMeta">Обновляется…</div>
+  <div class="tabs" id="tabs">
+    <button class="tab active" data-tab="targets">🎯 Цели</button>
+    <button class="tab" data-tab="events">💥 События</button>
+    <button class="tab" data-tab="archive">📦 Архив</button>
+  </div>
+  <div id="list"></div>
+</div>
+<div id="map"></div>
+<div id="status"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.marker-motion@0.8.2/dist/leaflet.marker-motion.js"></script>
+<script>
+'use strict';
+
+// ============ КОНФИГ ============
+// ПОРЯДОК ВАЖЕН: первые 5 — приоритетные, воркеры хватают их первыми.
+// Если у вас есть более живые каналы — замените здесь.
+const PRIORITY_CHANNELS = [
+    'kyiv_monitor1',
+    'mon1tor_ua',
+    'radar_raketaa',
+    'kyiv_vanek',
+    'kiev_nebo',
+];
+const CHANNELS = [
+    'kievreal1',
+    'kiev_levyy_bereg',
+    'praviy_bereg_kiev',
+    'kiev_tryvoha',
+    'kyiv_nebo',
+];
+
+const MESSAGES_TO_SCAN   = 25;
+const POLL_INTERVAL_MS   = 45_000;   // Telegram /s/ кэширует 30–60 с
+const FETCH_TIMEOUT_MS   = 9_000;
+const PARALLEL_WORKERS   = 3;
+const TARGET_RESET_MS    = 10 * 60 * 1000;
+const EVENT_ACTIVE_MS    = 60 * 60 * 1000;
+const EVENT_TTL_MS       = 24 * 60 * 60 * 1000;
+const MERGE_WINDOW_MS    = 5 * 60 * 1000;
+const MERGE_RADIUS_KM    = 60;
+const HISTORY_LIMIT      = 20;
+const DEDUP_DISTANCE_KM  = 2;
+const TIMEZONE           = 'Europe/Kyiv';
+
+const CORS_PROXIES = [
+    u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+    u => 'https://corsproxy.io/?url='              + encodeURIComponent(u),
+    u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u),
+    u => 'https://cors.eu.org/' + u,
+    u => 'https://api.allorigins.win/get?url='     + encodeURIComponent(u), // вернёт JSON, распарсим ниже
+];
+
+// ============ КАТЕГОРИИ ЦЕЛЕЙ ============
+const CATEGORIES = {
+    ballistic: { label: 'Баллистика', speedKmh: 1500, color: '#c04fff',
+                 words: ['кінжал','кинжал','іскандер','искандер','циркон','балістика','баллистика','с-300','с-400','с300','с400'] },
+    cruise:    { label: 'Крылатая',   speedKmh: 400,  color: '#ff2d2d',
+                 words: ['крилата','крылатая','калібр','калибр','х-101','х-555','kh-101','kh-555'] },
+    drone:     { label: 'БПЛА',       speedKmh: 80,   color: '#ff9500',
+                 words: ['герань','шахед','shahed','geran','гербера','бпла','дрон','камикадзе','ланцет','мопед'] },
+    jet_drone: { label: 'Реакт.БПЛА', speedKmh: 350,  color: '#ff6b00',
+                 words: ['реактивн'] },
+    unknown:   { label: 'НЛО',        speedKmh: 200,  color: '#00e5ff', words: [] },
+};
+
+function detectCategory(text) {
+    if (!text) return 'unknown';
+    const lower = text.toLowerCase();
+    const hasJet   = lower.includes('реактивн');
+    const hasDrone = ['шахед','герань','гербера','shahed','geran'].some(w => lower.includes(w));
+    if (hasJet && hasDrone) return 'jet_drone';
+    if (hasJet) return 'jet_drone';
+    for (const key of ['ballistic','cruise','drone']) {
+        for (const w of CATEGORIES[key].words) if (lower.includes(w)) return key;
+    }
+    return 'unknown';
+}
+
+// ============ КАТЕГОРИИ СОБЫТИЙ ============
+const EVENT_TYPES = {
+    impact:    { label: 'Прилёт',  emoji: '💥', color: '#ff3b30',
+                 words: ['приліт','прилет','влучання','впала','впав','упала','упав','влучив','влучила','пошкоджено','пошкоджена','пошкоджені','пошкоджений','руйнування'] },
+    fire:      { label: 'Пожар',   emoji: '🔥', color: '#ff9500',
+                 words: ['пожежа','пожежі','загоряння','займання','горить','горять','возгорання'] },
+    intercept: { label: 'Сбитие',  emoji: '🛡️', color: '#30b0c7',
+                 words: ['збито','збили','збиття','перехоплення','ппо працює','ппо спрацювала','збитий','збита','збиті'] },
+    debris:    { label: 'Обломки', emoji: '🔻', color: '#ffcc00',
+                 words: ['уламки','осколки','залишки','фрагменти'] },
+    explosion: { label: 'Взрыв',   emoji: '💣', color: '#e01e1e',
+                 words: ['вибух','взрыв','детонація'] },
+};
+
+function detectEventTypes(text) {
+    if (!text) return [];
+    const lower = text.toLowerCase();
+    const types = [];
+    for (const [key, def] of Object.entries(EVENT_TYPES)) {
+        for (const w of def.words) if (lower.includes(w)) { types.push(key); break; }
+    }
+    return types;
+}
+
+// ============ НОРМАЛИЗАЦИЯ ============
+function normalizeName(s) {
+    return String(s).toLowerCase()
+        .replace(/[ʼ'`']/g, '')
+        .replace(/ё/g, 'е')
+        .replace(/ґ/g, 'г')
+        .replace(/i/g, 'і');
+}
+
+// ============ СТЕММЕР ============
+const STEM_ENDINGS = [
+    'ському','ського','ський','ська','ське','ські',
+    'цькому','цького','цький','цька','цьке','цькі',
+    'ами','ями','ові','еві','єві','ому','ему','єму',
+    'ах','ях','ів','їв','ом','ем','єм','ою','ею','єю',
+    'ого','его','ої','ей','ой','ий','ій','їй',
+    'а','я','о','е','у','ю','и','і','ї','є','й','ь'
+];
+const STEM_MIN_WORD = 6, STEM_MIN_STEM = 4;
+const STEM_STOPWORDS = new Set([
+    'район','районі','району','районе','райони','районів',
+    'масив','масиві','масиву','місто','місті','міста',
+    'село','селі','села','селище','селищі','смт',
+    'обл','область','області','центр','центрі',
+    'києва','києві','києву','київ','киев','киеве','киева','киеву',
+]);
+function stemWord(w) {
+    if (!w || w.length < STEM_MIN_WORD) return w;
+    for (const e of STEM_ENDINGS) {
+        if (w.endsWith(e) && w.length - e.length >= STEM_MIN_STEM) return w.slice(0, w.length - e.length);
+    }
+    return w;
+}
+
+// ============ РАЙОНЫ И МЕСТНОСТИ КИЕВА ============
+const KYIV_DISTRICTS = [
+    { name: "Подільський район",     lat: 50.4900, lng: 30.4700, aliases: ["подільському","подільський","подольском","подольский"] },
+    { name: "Голосіївський район",   lat: 50.3900, lng: 30.5100, aliases: ["голосіївському","голосіївський","голосеевском","голосеевский"] },
+    { name: "Печерський район",      lat: 50.4270, lng: 30.5400, aliases: ["печерському","печерський","печерском","печерский"] },
+    { name: "Шевченківський район",  lat: 50.4500, lng: 30.5000, aliases: ["шевченківському","шевченківський","шевченковском","шевченковский"] },
+    { name: "Оболонський район",     lat: 50.5100, lng: 30.4900, aliases: ["оболонському","оболонський","оболонском","оболонский"] },
+    { name: "Дарницький район",      lat: 50.4000, lng: 30.6400, aliases: ["дарницькому","дарницький","дарницком","дарницкий"] },
+    { name: "Деснянський район",     lat: 50.5200, lng: 30.6100, aliases: ["деснянському","деснянський","деснянском","деснянский"] },
+    { name: "Дніпровський район",    lat: 50.4600, lng: 30.6100, aliases: ["дніпровському","дніпровський","днепровском","днепровский"] },
+    { name: "Солом'янський район",   lat: 50.4250, lng: 30.4400, aliases: ["солом'янському","солом'янський","соломенском","соломенский","соломянському"] },
+    { name: "Святошинський район",   lat: 50.4550, lng: 30.4000, aliases: ["святошинському","святошинський","святошинском","святошинский"] },
+];
+
+const KYIV_LOCATIONS = [
+    { name:"Поділ", lat:50.4650, lng:30.5150 },
+    { name:"Виноградар", lat:50.5100, lng:30.4350, aliases:["виноградарі","виноградаре","виноградарю"] },
+    { name:"Куренівка", lat:50.4850, lng:30.4850, aliases:["куренівці","куренівку","куренівки","куреньовка"] },
+    { name:"Почайна", lat:50.4880, lng:30.5000, aliases:["почайні","почайну"] },
+    { name:"Оболонь", lat:50.5100, lng:30.5000, aliases:["оболоні","оболонью"] },
+    { name:"Мінський масив", lat:50.5250, lng:30.4700, aliases:["мінському","минском","мінський"] },
+    { name:"Пуща-Водиця", lat:50.5900, lng:30.3350, aliases:["пущі-водиці","пуща-водица"] },
+    { name:"Пріорка", lat:50.5050, lng:30.4900, aliases:["пріорці","приорке"] },
+    { name:"Голосіїв", lat:50.3960, lng:30.5100, aliases:["голосієво","голосеево","голосієві"] },
+    { name:"Теремки", lat:50.3700, lng:30.4580, aliases:["теремках","теремки-1","теремки-2","теремків"] },
+    { name:"Феофанія", lat:50.3490, lng:30.4780, aliases:["феофанії"] },
+    { name:"Пирогів", lat:50.3500, lng:30.5350, aliases:["пирогові","пирогово"] },
+    { name:"Корчувате", lat:50.3540, lng:30.5480, aliases:["корчуватому"] },
+    { name:"Мишоловка", lat:50.3690, lng:30.5480, aliases:["мишоловці"] },
+    { name:"Деміївка", lat:50.4060, lng:30.5200, aliases:["деміївці","демиевке"] },
+    { name:"Голосіївський масив", lat:50.3930, lng:30.5050 },
+    { name:"Печерськ", lat:50.4250, lng:30.5450, aliases:["печерську","печерске","печерська","печерські"] },
+    { name:"Липки", lat:50.4380, lng:30.5320, aliases:["липках"] },
+    { name:"Звіринець", lat:50.4210, lng:30.5650, aliases:["зверинец","звіринці","зверинце"] },
+    { name:"Теличка", lat:50.4050, lng:30.5700, aliases:["теличці"] },
+    { name:"Палац Україна", lat:50.4270, lng:30.5200, aliases:["палацу україна","палац україна","палац украина"] },
+    { name:"Саперне поле", lat:50.4170, lng:30.5550, aliases:["саперному полі","саперне поле"] },
+    { name:"Центр", lat:50.4470, lng:30.5230, aliases:["центрі","центре","центру"] },
+    { name:"Лук'янівка", lat:50.4620, lng:30.4800, aliases:["лук'янівці","лукьяновке","лукьянівка","лукʼянівка","лукʼянівці","лук'янівка","лук'янівки"] },
+    { name:"Сирець", lat:50.4700, lng:30.4450, aliases:["сирці"] },
+    { name:"Нивки", lat:50.4580, lng:30.4150, aliases:["нивках","нивок"] },
+    { name:"Шулявка", lat:50.4500, lng:30.4650, aliases:["шулявці","шулявку"] },
+    { name:"Татарка", lat:50.4650, lng:30.5150, aliases:["татарці"] },
+    { name:"Кудрявець", lat:50.4600, lng:30.4950, aliases:["кудрявці","кудрявця"] },
+    { name:"Солом'янка", lat:50.4250, lng:30.4550, aliases:["солом'янці","соломянка","соломенка","соломянке","солом'янку"] },
+    { name:"Відрадний", lat:50.4350, lng:30.4350, aliases:["відрадному","отрадном","відрадний масив"] },
+    { name:"Чоколівка", lat:50.4200, lng:30.4300, aliases:["чоколівці","чоколовке"] },
+    { name:"Жуляни", lat:50.4050, lng:30.4300, aliases:["жулянах","жулян"] },
+    { name:"Аеропорт Жуляни", lat:50.4020, lng:30.4520, aliases:["аеропорт жуляни","жуляни аеропорт","аэропорт жуляны"] },
+    { name:"Караваєві Дачі", lat:50.4300, lng:30.4450, aliases:["караваєвих дачах","караваевых дачах"] },
+    { name:"Святошин", lat:50.4550, lng:30.4050, aliases:["святошині","святошино"] },
+    { name:"Академмістечко", lat:50.4650, lng:30.3550, aliases:["академмістечку","академгородке"] },
+    { name:"Біличі", lat:50.4750, lng:30.3500, aliases:["біличах"] },
+    { name:"Героїв Дніпра", lat:50.5250, lng:30.5000, aliases:["героїв дніпра","героев днепра"] },
+    { name:"Північна Оболонь", lat:50.5350, lng:30.5100 },
+    { name:"Троєщина", lat:50.5150, lng:30.6100, aliases:["троєщині","троещине","троєщини","троєщину","троещина"] },
+    { name:"Лісовий масив", lat:50.4850, lng:30.6350, aliases:["лісовому","лесном","лісовий"] },
+    { name:"Биківня", lat:50.4900, lng:30.6800, aliases:["биківні","быковне"] },
+    { name:"Вигурівщина", lat:50.5350, lng:30.6250, aliases:["вигурівщині"] },
+    { name:"Русанівка", lat:50.4400, lng:30.6000, aliases:["русанівці","русановке","русанівку"] },
+    { name:"Березняки", lat:50.4200, lng:30.6000, aliases:["березняках"] },
+    { name:"Лівобережний масив", lat:50.4550, lng:30.5950, aliases:["лівобережному","лівобережному масиві","лівобережний","левобережном"] },
+    { name:"Воскресенка", lat:50.4950, lng:30.6000, aliases:["воскресенці","воскресенке"] },
+    { name:"Райдужний масив", lat:50.5000, lng:30.5900, aliases:["райдужному","радужном"] },
+    { name:"Гідропарк", lat:50.4500, lng:30.5750, aliases:["гідропарку","гидропарке"] },
+    { name:"Русанівські сади", lat:50.4700, lng:30.6000, aliases:["русанівських садах"] },
+    { name:"Позняки", lat:50.4100, lng:30.6350, aliases:["позняках","позняків"] },
+    { name:"Осокорки", lat:50.3950, lng:30.6250, aliases:["осокорках","осокорків"] },
+    { name:"Харківський масив", lat:50.4100, lng:30.6500, aliases:["харківському","харьковском","харківський"] },
+    { name:"Бортничі", lat:50.3550, lng:30.6700, aliases:["бортничах","бортничей"] },
+    { name:"Нова Дарниця", lat:50.4250, lng:30.6500 },
+    { name:"Рембаза", lat:50.4200, lng:30.6550, aliases:["рембазі","рембазе"] },
+    { name:"Червоний Хутір", lat:50.4050, lng:30.6750, aliases:["червоному хуторі","красном хуторе"] },
+    { name:"ДВРЗ", lat:50.4250, lng:30.6750, aliases:["дврз"] },
+    { name:"Соцмісто", lat:50.4450, lng:30.6300, aliases:["соцмісті","соцгороде"] },
+    { name:"Стара Дарниця", lat:50.4450, lng:30.6350, aliases:["старій дарниці"] },
+    { name:"Столичний ринок", lat:50.5050, lng:30.4550, aliases:["ринку столичний","рынок столичный","ринок столичний","столичному ринку"] },
+];
+
+const KYIV_SUBURBS = [
+    { name:"Борщагівка",                 lat:50.4235, lng:30.3876, aliases:["борщагівці","борщаговке","борщагівку","борщаговка"] },
+    { name:"Микільська Борщагівка",      lat:50.4230, lng:30.3850, aliases:["мікільська борщагівка","никольская борщаговка","микільській борщагівці"] },
+    { name:"Михайлівська Борщагівка",    lat:50.4215, lng:30.4080, aliases:["михайлівська борщагівка","михайловская борщаговка","михайлівській борщагівці"] },
+    { name:"Софіївська Борщагівка",      lat:50.4105, lng:30.3685, aliases:["софіївська борщагівка","софиевская борщаговка","софіївській борщагівці","софіївську борщагівку"] },
+    { name:"Петропавлівська Борщагівка", lat:50.4300, lng:30.3650, aliases:["петропавлівська борщагівка","петропавловская борщаговка"] },
+    { name:"Святопетрівське",            lat:50.3950, lng:30.3250, aliases:["святопетровское","святопетрівському"] },
+    { name:"Боярка",                     lat:50.3233, lng:30.3136, aliases:["боярці","боярку","бояркою"] },
+    { name:"Чайки",                      lat:50.4361, lng:30.3372, aliases:["чайках"] },
+    { name:"Вишневе",                    lat:50.3892, lng:30.3698, aliases:["вишневому","вишневое","вишневого"] },
+    { name:"Гатне",                      lat:50.3650, lng:30.3900, aliases:["гатному"] },
+    { name:"Крюківщина",                 lat:50.3655, lng:30.3600, aliases:["крюківщині","крюковщине"] },
+    { name:"Тарасівка",                  lat:50.3700, lng:30.3300, aliases:["тарасівці"] },
+    { name:"Хотів",                      lat:50.3410, lng:30.4760, aliases:["хотові","хотіве"] },
+    { name:"Лісники",                    lat:50.3330, lng:30.5200, aliases:["лісниках","лесниках"] },
+    { name:"Козин",                      lat:50.2670, lng:30.6330, aliases:["козині","козине"] },
+    { name:"Підгірці",                   lat:50.2740, lng:30.5890, aliases:["підгірцях","подгорцах"] },
+    { name:"Українка",                   lat:50.1467, lng:30.7400, aliases:["українці","украинке"] },
+    { name:"Обухів",                     lat:50.1066, lng:30.6244, aliases:["обухові","обухове","обухова"] },
+    { name:"Ворзель",                    lat:50.5320, lng:30.1530, aliases:["ворзелі"] },
+    { name:"Немішаєве",                  lat:50.5570, lng:30.0750, aliases:["немішаєвому","немишаево"] },
+    { name:"Коцюбинське",                lat:50.4960, lng:30.3270, aliases:["коцюбинському","коцюбинское"] },
+    { name:"Ірпінь",                     lat:50.5218, lng:30.2506, aliases:["ірпені","ирпене","ірпеня","ірпеню","ірпіня","ірпіні","ирпень"] },
+    { name:"Буча",                       lat:50.5434, lng:30.2120, aliases:["бучі","буче","бучи","бучу"] },
+    { name:"Гостомель",                  lat:50.5689, lng:30.2625, aliases:["гостомелі","гостомеле","гостомеля"] },
+    { name:"Вишгород",                   lat:50.5844, lng:30.4860, aliases:["вишгороді","вышгороде"] },
+    { name:"Нові Петрівці",              lat:50.6300, lng:30.4600, aliases:["нових петрівцях","новых петровцах"] },
+    { name:"Лютеж",                      lat:50.6500, lng:30.4200, aliases:["лютежі"] },
+    { name:"Бровари",                    lat:50.5110, lng:30.7900, aliases:["броварах","броварів","броварам"] },
+    { name:"Требухів",                   lat:50.4750, lng:30.9200, aliases:["требухові","требухове"] },
+    { name:"Бориспіль",                  lat:50.3527, lng:30.9550, aliases:["борисполі","борисполе","борисполя","борисполю","аеропорт бориспіль","бориспіль аеропорт"] },
+    { name:"Калинівка",                  lat:50.4830, lng:30.8560, aliases:["калинівці","калиновке"] },
+    { name:"Гнідин",                     lat:50.3050, lng:30.7250, aliases:["гнідині","гнедине"] },
+    { name:"Щасливе",                    lat:50.3750, lng:30.8550, aliases:["щасливому","счастливом"] },
+    { name:"Київ",                       lat:50.4501, lng:30.5234, aliases:["києві","києва","києву","києвом","киев","киеве","киева","киеву","киевом","київі","київа","київу","києв","київ"] },
+    { name:"Біла Церква",                lat:49.7950, lng:30.1160, aliases:["білій церкві","белой церкви","белая церковь","білої церкви","білу церкву"] },
+    { name:"Васильків",                  lat:50.1810, lng:30.3120, aliases:["василькові","василькове","василькова","васильков"] },
+    { name:"Фастів",                     lat:50.0750, lng:29.9180, aliases:["фастові","фастове","фастова","фастов"] },
+    { name:"Переяслав",                  lat:50.0700, lng:31.4500, aliases:["переяславі","переяславе","переяславль","переяслав-хмельницкий"] },
+    { name:"Кагарлик",                   lat:49.8500, lng:30.8100, aliases:["кагарлику","кагарлике"] },
+    { name:"Миронівка",                  lat:49.6600, lng:31.0000, aliases:["миронівці","мироновке"] },
+    { name:"Славутич",                   lat:51.5200, lng:30.7300, aliases:["славутичі","славутиче"] },
+    { name:"Ржищів",                     lat:49.9600, lng:31.0500, aliases:["ржищеві","ржищеве"] },
+    { name:"Богуслав",                   lat:49.5500, lng:30.8700, aliases:["богуславі","богуславе"] },
+    { name:"Тараща",                     lat:49.5600, lng:30.4900, aliases:["таращі","тараще"] },
+    { name:"Сквира",                     lat:49.7300, lng:29.6700, aliases:["сквирі","сквире"] },
+];
+
+// ============ МОСТЫ ============
+const KYIV_BRIDGES = [
+{name:"Автовокзальный путепровод",aliases:["Демеевский путепровод"],lat:50.421,lng:30.521},
+{name:"Арсенальная пешеходная переправа",aliases:["переправа возле Арсенальной"],lat:50.444,lng:30.545},
+{name:"Байковый железнодорожный мост",aliases:["ж/д мост на Байковой"],lat:50.414,lng:30.513},
+{name:"Берестейский путепровод",aliases:["путепровод на Берестейском"],lat:50.452,lng:30.438},
+{name:"Венецианский мост",aliases:["мост Гидропарка"],lat:50.445,lng:30.578},
+{name:"Гаванский мост",aliases:["Гаванський міст"],lat:50.468,lng:30.516},
+{name:"Дарницкий автомобильно-железнодорожный мост",aliases:["Дарницкий мост"],lat:50.421,lng:30.604},
+{name:"Дарницкий железнодорожный мост",aliases:["Старый Дарницкий ж/д мост"],lat:50.422,lng:30.607},
+{name:"Деснянский мост",aliases:["мост через Десёнку"],lat:50.493,lng:30.558},
+{name:"Дегтярёвский путепровод",aliases:["Дегтярівський шляхопровід"],lat:50.464,lng:30.454},
+{name:"Киевский железнодорожный мост",aliases:["железнодорожная переправа"],lat:50.424,lng:30.555},
+{name:"Кудрявский мост",aliases:["Кудрявский пешеходный"],lat:50.459,lng:30.500},
+{name:"Куренёвский железнодорожный мост",aliases:["Куреневский ж/д мост"],lat:50.488,lng:30.475},
+{name:"Мост Метро",aliases:["метромост","Metro Bridge"],lat:50.449,lng:30.573},
+{name:"Мост Патона",aliases:["Міст Патона","Paton Bridge"],lat:50.421,lng:30.587},
+{name:"Оболонский пешеходный мост",aliases:["мост на Оболонский остров"],lat:50.506,lng:30.507},
+{name:"Парковый мост",aliases:["Мост влюблённых"],lat:50.445,lng:30.530},
+{name:"Пешеходный мост на Труханов остров",aliases:["Труханов мост"],lat:50.456,lng:30.548},
+{name:"Пешеходный мост Владимирский спуск",aliases:["мост Кличко","Стеклянный мост"],lat:50.456,lng:30.525},
+{name:"Подольский мостовой переход",aliases:["Подольско-Воскресенский мост","ПВМП"],lat:50.475,lng:30.544},
+{name:"Путепровод Шулявский",aliases:["Шулявский путепровод"],lat:50.453,lng:30.441},
+{name:"Рыбальский железнодорожный мост",aliases:["Петровский ж/д мост"],lat:50.480,lng:30.523},
+{name:"Северный мост",aliases:["Московский мост","Північний міст"],lat:50.49097,lng:30.53674},
+{name:"Старозабарский железнодорожный мост",aliases:["Старозабарский мост"],lat:50.500,lng:30.490},
+{name:"Южный мост",aliases:["Південний міст"],lat:50.396,lng:30.582}
+];
+
+// ============ ПОДСТАНЦИИ / ЭНЕРГООБЪЕКТЫ / ИНЦИДЕНТЫ ============
+const KYIV_SUBSTATIONS = [
+  ["ПС 750 кВ «Київська»",50.490836,29.688768],["ПС 330 кВ «Північна»",50.61313,30.38222],
+  ["ПС 330 кВ «Новокиївська»",50.380,30.470],["ПС 330 кВ «Нивки»",50.476,30.410],
+  ["ПС 330 кВ «Броварська»",50.538,30.899],["ПС 110 кВ «Пріорська»",50.509,30.424],
+  ["ПС 110 кВ «Біличі»",50.472,30.330],["ПС 110 кВ «Берковецька»",50.495,30.359],
+  ["ПС 110 кВ «Московська»",50.430,30.520],["ПС 110 кВ «Олімпійська»",50.433,30.520],
+  ["ПС 110 кВ «Осокорки»",50.395,30.620],["ПС 110 кВ «Поливка»",50.400,30.630],
+  ["ПС 110 кВ «Соломенська»",50.430,30.480],["ПС 110 кВ «Протеїнська»",50.425,30.500]
+];
+
+const ENERGY_DB = [
+{name:"Київська ТЕЦ-5",aliases:["ТЕЦ-5","Киевская ТЭЦ-5","CHP-5"],lat:50.393,lng:30.569},
+{name:"Київська ТЕЦ-6",aliases:["ТЕЦ-6","Киевская ТЭЦ-6","CHP-6"],lat:50.532,lng:30.662},
+{name:"Дарницька ТЕЦ",aliases:["ТЕЦ-4","Дарницкая ТЭЦ","Дарницька ТЕЦ-4"],lat:50.447,lng:30.640},
+{name:"Трипільська ТЕС",aliases:["Трипольская ТЭС"],lat:50.163,lng:30.746},
+{name:"Білоцерківська ТЕЦ",aliases:["Белоцерковская ТЭЦ"],lat:49.796,lng:30.117},
+{name:"Київська ГЕС",aliases:["Киевская ГЭС"],lat:50.584,lng:30.488},
+{name:"Київська ГАЕС",aliases:["Киевская ГАЭС"],lat:50.585,lng:30.490},
+];
+
+const INFRASTRUCTURE_OBJECTS = [
+{name:"Київська ТЕЦ-6",aliases:["ТЕЦ-6","Киевская ТЭЦ-6","CHP-6"],lat:50.531699,lng:30.662307},
+{name:"Київська ТЕЦ-5",aliases:["ТЕЦ-5","Киевская ТЭЦ-5","CHP-5"],lat:50.393170,lng:30.569477},
+{name:"Дарницька ТЕЦ-4",aliases:["ТЕЦ-4","Дарницька ТЕЦ","Дарницкая ТЭЦ"],lat:50.446638,lng:30.639666},
+{name:"ПС 750 кВ «Київська»",aliases:["Киевская 750","ПС Київська","Kyivska 750"],lat:50.490836,lng:29.688768}
+];
+
+const INCIDENT_OBJECTS = [
+{name:"Борова",lat:50.18620,lng:30.10496},{name:"Берковець",lat:50.49540,lng:30.35934},
+{name:"Гостомель",lat:50.59142,lng:30.24113},{name:"Дарниця",lat:50.41274,lng:30.69060},
+{name:"Нові Петрівці",lat:50.61322,lng:30.38299},{name:"Нивки",lat:50.47617,lng:30.41084},
+{name:"Почайна",lat:50.48003,lng:30.51184},{name:"Теличка",lat:50.39370,lng:30.56890}
+];
+
+// ============ НАСЕЛЁННЫЕ ПУНКТЫ ОБЛАСТИ ============
+const KYIV_OBLAST_SETTLEMENTS = [
+    ["Прип'ять",51.39474302,30.08446583],["Чорнобиль",51.27184786,30.22441931],
+    ["Біла Церква",49.80563193,30.10926837],["Терезине",49.85733315,30.10862037],
+    ["Володарка",49.52395189,29.91275973],["Гребінки",49.95584068,30.17515067],
+    ["Дослідницьке",49.92288588,30.14679318],["Рокитне",49.68965541,30.47630798],
+    ["Сквира",49.73079435,29.66402976],["Ставище",49.39130103,30.1882012],
+    ["Тараща",49.56066626,30.49540089],["Тетіїв",49.37317715,29.67843897],
+    ["Узин",49.82016789,30.42185138],["Бориспіль",50.3612042,30.95256256],
+    ["Вороньків",50.21625067,30.90331307],["Гора",50.37066577,30.85528315],
+    ["Дівички",50.06469374,31.269951],["Гнідин",50.32833684,30.70668059],
+    ["Переяслав",50.07228667,31.45321568],["Щасливе",50.37445736,30.78656938],
+    ["Студеники",50.20663801,31.61268373],["Ташань",50.04578143,31.84206273],
+    ["Циблі",50.00098357,31.55433719],["Яготин",50.24025082,31.79157062],
+    ["Баришівка",50.35755065,31.31698645],["Березань",50.31236212,31.47751805],
+    ["Бровари",50.50655438,30.80095343],["Княжичі",50.45746644,30.78451038],
+    ["Сотницьке",50.47801695,30.95607335],["Требухів",50.48370528,30.90574211],
+    ["Велика Димерка",50.5946841,30.91175229],["Зазим'я",50.56848729,30.6735435],
+    ["Згурівка",50.49685669,31.78529495],["Калинівка",50.56371446,30.82346993],
+    ["Калита",50.7529556,31.02528852],["Білогородка",50.38342226,30.25516463],
+    ["Бородянка",50.64695206,29.93221968],["Петропавлівська Борщагівка",50.43191108,30.33371091],
+    ["Софіївська Борщагівка",50.41289245,30.36447623],["Чайки",50.43729993,30.28713401],
+    ["Буча",50.55148938,30.21142382],["Бабинці",50.63841294,30.02560464],
+    ["Ворзель",50.54524068,30.14320959],["Вишневе",50.38625104,30.36581354],
+    ["Крюківщина",50.36982722,30.36855771],["Гостомель",50.57875256,30.26001532],
+    ["Ірпінь",50.51146447,30.23870831],["Коцюбинське",50.48938317,30.33598857],
+    ["Макарів",50.45270027,29.80411933],["Кодра",50.59215781,29.55805109],
+    ["Немішаєве",50.56289237,30.09216235],["Клавдієво-Тарасове",50.58068682,30.0072432],
+    ["Пісківка",50.6945919,29.59406433],["Вишгород",50.58786993,30.5017729],
+    ["Димер",50.78567437,30.30495006],["Іванків",50.93968266,29.89113118],
+    ["Красятичі",51.08002951,29.62136874],["Славутич",51.52103146,30.75931254],
+    ["Богуслав",49.5464611,30.8713407],["Васильків",50.18442314,30.31563006],
+    ["Кагарлик",49.8642776,30.81538338],["Козин",50.20818444,30.66328622],
+    ["Миронівка",49.66192468,30.98131947],["Обухів",50.11393672,30.62464616],
+    ["Ржищів",49.97019938,31.04991003],["Українка",50.1387578,30.73689237],
+    ["Трипілля",50.11958266,30.77209358],["Хотів",50.32794438,30.46678319],
+    ["Боярка",50.33615993,30.28336111],["Гатне",50.36108756,30.4140205],
+    ["Віта-Поштова",50.31177943,30.37364848],["Глеваха",50.26833216,30.32663586],
+    ["Калинівка",50.22573515,30.23184574],["Кожанка",49.9681956,29.76302798],
+    ["Фастів",50.07670738,29.92340123],["Чабани",50.33951508,30.42100442],
+    ["Наливайківка",50.485,29.719],["Катюжанка",50.806,30.138],
+    ["Козелець",50.900,31.117],["Новгород-Сіверський",52.006,33.262],
+    ["Носівка",50.932,31.583],["Сосниця",51.531,32.500],
+    ["Київ",50.4501,30.5234]
+];
+
+// ============ СТАРЫЙ СЛОВАРЬ И REGEX ============
+const PLACES_OLD = {
+  "чернігів":[51.500,31.290,"Чернігів"],"ніжин":[51.050,31.880,"Ніжин"],"прилуки":[50.590,32.380,"Прилуки"],
+  "суми":[50.910,34.800,"Суми"],"шустка":[51.870,33.470,"Шостка"],"конотоп":[51.240,33.200,"Конотоп"],
+  "харків":[49.990,36.230,"Харків"],"дніпро":[48.460,35.040,"Дніпро"],"запоріжжя":[47.840,35.140,"Запоріжжя"],
+  "одеса":[46.480,30.730,"Одеса"],"миколаїв":[46.970,32.000,"Миколаїв"],"херсон":[46.640,32.620,"Херсон"],
+  "львів":[49.840,24.030,"Львів"],"вінниця":[49.230,28.470,"Вінниця"],"полтава":[49.590,34.550,"Полтава"],
+  "черкаси":[49.440,32.060,"Черкаси"],"житомир":[50.250,28.660,"Житомир"],"рівне":[50.620,26.250,"Рівне"],
+  "луцьк":[50.750,25.340,"Луцьк"],"ужгород":[48.620,22.290,"Ужгород"],"воронеж":[51.670,39.180,"Воронеж"],
+  "ростов-на-дону":[47.240,39.700,"Ростов-на-Дону"],"курск":[51.730,36.190,"Курск"],"белгород":[50.600,36.590,"Белгород"],
+  "брянск":[53.250,34.370,"Брянск"],"орёл":[52.970,36.060,"Орёл"],"энгельс":[51.480,46.210,"Энгельс"],
+  "гомель":[52.440,30.990,"Гомель"],"припять":[51.400,30.050,"Припять"],
+  "любеч":[51.420,30.720,"Любеч"],"хойники":[51.900,29.970,"Хойники"]
+};
+
+const EXTRA_PLACES = {
+  "трипільськ[а-яіїєґ]*\\s*тес|трипольск[а-яіїєґ]*\\s*тэс":[50.13577,30.74499,"Трипільська ТЕС"],
+  "тец[-\\s]?5|тец[-\\s]?п'ять":[50.37885,30.57444,"ТЕЦ-5 (Видубичі)"],
+  "київська\\s*гес|киевская\\s*гэс":[50.60034,30.48642,"Київська ГЕС"],
+  "дамба[а-яіїєґ\\s]*водосховищ":[50.58059,30.53032,"Дамба Київського водосховища"],
+  "наливайківк|наливайковк":[50.24699,30.73875,"Електропідстанція «Київська»"],
+  "київторгмаш|киевторгмаш":[50.48266,30.48139,"Завод «Київторгмаш»"],
+  "південний міст|южный мост":[50.3940,30.5870,"Південний міст"],
+  "видубичі":[50.4100,30.5630,"Видубичі"],
+  "рибальський\\s*острів":[50.4710,30.5320,"Рибальський острів"],
+  "каспійськ[а-яіїєґ]*\\s*море|каспийск[а-яіїєґ]*\\s*море":[42.0,51.0,"Каспійське море"],
+  "міллєрово|миллерово":[48.92,40.39,"Міллєрово"],
+  "чернігівщина|черниговщина":[51.5000,31.2900,"Чернігівщина"]
+};
+
+const REGIONS = [
+  {re:/курськ|курск/i,             name:"Курська обл.",      lat:51.73, lng:36.19},
+  {re:/брянськ|брянск/i,           name:"Брянська обл.",     lat:53.25, lng:34.37},
+  {re:/белгород|бєлгород/i,        name:"Бєлгородська обл.", lat:50.60, lng:36.59},
+  {re:/ростов/i,                   name:"Ростовська обл.",   lat:47.24, lng:39.70},
+  {re:/воронеж/i,                  name:"Воронезька обл.",   lat:51.67, lng:39.18},
+  {re:/крим|крым|севастопол|чорне\s+море|черное\s+море/i,name:"Крим / Чорне море",lat:45.00,lng:34.00},
+  {re:/чернігівськ|черниговск/i,   name:"Чернігівська обл.", lat:51.50, lng:31.29},
+  {re:/сумськ|сумск/i,             name:"Сумська обл.",      lat:50.91, lng:34.80},
+  {re:/київськ|киевск/i,           name:"Київська обл.",     lat:50.45, lng:30.52}
+];
+
+// ============ ПОСТРОЕНИЕ ИНДЕКСОВ ============
+const LOCATION_INDEX = {};
+const STEM_CANDIDATES = {};
+const STEM_INDEX = {};
+const REGEX_PLACES = [];
+
+function indexLocation(label, lat, lng, aliases) {
+    const coords = { lat, lng, label };
+    const keys = [label, ...(aliases || [])];
+    for (const raw of keys) {
+        if (!raw) continue;
+        const nk = normalizeName(raw);
+        if (!nk) continue;
+        if (!LOCATION_INDEX[nk]) LOCATION_INDEX[nk] = coords;
+        for (const w of nk.split(/\s+/)) {
+            if (w.length < STEM_MIN_WORD) continue;
+            if (STEM_STOPWORDS.has(w)) continue;
+            const st = stemWord(w);
+            if (st.length < STEM_MIN_STEM) continue;
+            if (!STEM_CANDIDATES[st]) STEM_CANDIDATES[st] = [];
+            if (!STEM_CANDIDATES[st].includes(coords)) STEM_CANDIDATES[st].push(coords);
+        }
+    }
+}
+
+for (const b of KYIV_BRIDGES)            indexLocation(b.name, b.lat, b.lng, b.aliases);
+for (const p of KYIV_LOCATIONS)          indexLocation(p.name, p.lat, p.lng, p.aliases);
+for (const d of KYIV_DISTRICTS)          indexLocation(d.name, d.lat, d.lng, d.aliases);
+for (const p of KYIV_SUBURBS)            indexLocation(p.name, p.lat, p.lng, p.aliases);
+for (const e of ENERGY_DB)               indexLocation(e.name, e.lat, e.lng, e.aliases);
+for (const o of INFRASTRUCTURE_OBJECTS)  indexLocation(o.name, o.lat, o.lng, o.aliases);
+for (const o of INCIDENT_OBJECTS)        indexLocation(o.name, o.lat, o.lng, []);
+for (const s of KYIV_SUBSTATIONS)        indexLocation(s[0], s[1], s[2], []);
+for (const r of KYIV_OBLAST_SETTLEMENTS) indexLocation(r[0], r[1], r[2], []);
+for (const [k, v] of Object.entries(PLACES_OLD)) indexLocation(v[2], v[0], v[1], [k]);
+for (const [st, arr] of Object.entries(STEM_CANDIDATES)) if (arr.length === 1) STEM_INDEX[st] = arr[0];
+for (const [pat, [lat, lng, label]] of Object.entries(EXTRA_PLACES)) {
+    try { REGEX_PLACES.push({ re: new RegExp(pat, 'i'), lat, lng, label }); } catch (e) {}
+}
+
+// ============ УТИЛИТЫ ============
+function escapeRegex(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function formatTime(iso) {
+    try {
+        return new Date(iso).toLocaleString('ru-RU', {
+            timeZone: TIMEZONE,
+            day: '2-digit', month: '2-digit',
+            hour: '2-digit', minute: '2-digit',
+        }).replace(',', '');
+    } catch (e) { return iso; }
+}
+function formatHHMMSS(d) {
+    try {
+        return d.toLocaleTimeString('ru-RU', { timeZone: TIMEZONE, hour12: false });
+    } catch (e) { return d.toISOString().slice(11,19); }
+}
+function showStatus(text, ms = 3000, isError = false) {
+    const el = document.getElementById('status');
+    el.textContent = text;
+    el.classList.toggle('err', isError);
+    el.classList.add('show');
+    clearTimeout(showStatus._t);
+    showStatus._t = setTimeout(() => el.classList.remove('show'), ms);
+}
+function distanceKm(a, b) {
+    const R = 6371;
+    const dLat = (b.lat - a.lat) * Math.PI / 180;
+    const dLng = (b.lng - a.lng) * Math.PI / 180;
+    const la1 = a.lat * Math.PI / 180, la2 = b.lat * Math.PI / 180;
+    const x = Math.sin(dLat/2)**2 + Math.sin(dLng/2)**2 * Math.cos(la1) * Math.cos(la2);
+    return 2 * R * Math.asin(Math.sqrt(x));
+}
+function bearing(from, to) {
+    const φ1 = from.lat * Math.PI / 180, φ2 = to.lat * Math.PI / 180;
+    const Δλ = (to.lng - from.lng) * Math.PI / 180;
+    const y = Math.sin(Δλ) * Math.cos(φ2);
+    const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+// ============ ПОИСК ЛОКАЦИЙ ============
+function findPlaces(text) {
+    if (!text) return [];
+    const norm = normalizeName(text);
+    const found = [];
+    const usedLabels = new Set();
+
+    const exactKeys = Object.keys(LOCATION_INDEX).sort((a,b) => b.length - a.length);
+    for (const key of exactKeys) {
+        const coords = LOCATION_INDEX[key];
+        if (usedLabels.has(coords.label)) continue;
+        const re = new RegExp(`(^|[^а-яіїєґa-z])${escapeRegex(key)}([^а-яіїєґa-z]|$)`, 'i');
+        const m = re.exec(norm);
+        if (m) {
+            usedLabels.add(coords.label);
+            found.push({ lat: coords.lat, lng: coords.lng, label: coords.label, matchType: 'exact', _pos: m.index });
+        }
+    }
+
+    const stemmedText = norm.replace(/[а-яіїєґa-z]+/gi, w => stemWord(w));
+    const stemKeys = Object.keys(STEM_INDEX).sort((a,b) => b.length - a.length);
+    for (const st of stemKeys) {
+        const coords = STEM_INDEX[st];
+        if (usedLabels.has(coords.label)) continue;
+        const re = new RegExp(`(^|[^а-яіїєґa-z])${escapeRegex(st)}([^а-яіїєґa-z]|$)`, 'i');
+        const m = re.exec(stemmedText);
+        if (m) {
+            usedLabels.add(coords.label);
+            found.push({ lat: coords.lat, lng: coords.lng, label: coords.label, matchType: 'stem', _pos: m.index });
+        }
+    }
+
+    for (const rp of REGEX_PLACES) {
+        if (usedLabels.has(rp.label)) continue;
+        const m = rp.re.exec(norm);
+        if (m) {
+            usedLabels.add(rp.label);
+            found.push({ lat: rp.lat, lng: rp.lng, label: rp.label, matchType: 'regex', _pos: m.index });
+        }
+    }
+
+    if (found.length === 0) {
+        for (const reg of REGIONS) {
+            const m = reg.re.exec(norm);
+            if (m) {
+                usedLabels.add(reg.name);
+                found.push({ lat: reg.lat, lng: reg.lng, label: reg.name, matchType: 'region', _pos: m.index });
+                break;
+            }
+        }
+    }
+
+    found.sort((a, b) => (a._pos || 0) - (b._pos || 0));
+    const result = [];
+    for (const p of found) {
+        let dup = false;
+        for (const r of result) if (distanceKm(p, r) < DEDUP_DISTANCE_KM) { dup = true; break; }
+        if (!dup) result.push(p);
+    }
+    return result;
+}
+
+// ============ ПАРСЕР ЦЕЛЕЙ ============
+const DRONE_ID_RE = /(?<![\p{L}\p{N}])(герань|шахед|shahed|geran|гербера)[\s\-–—]*(\d{1,4})(?!\p{N})/iu;
+
+function extractDroneId(text) {
+    if (!text) return null;
+    const m = text.match(DRONE_ID_RE);
+    if (m) {
+        const base = m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase();
+        return `${base}-${m[2]}`;
+    }
+    return null;
+}
+
+// РАСШИРЕННЫЙ набор — 5 паттернов
+const MOVEMENT_PATTERNS = [
+    // 1. «с X на Y»
+    /(?:^|\s)(?:з|із|из|с|от|від)\s+[^,.!?]{2,60}?\s+(?:на|до|в|у|по|через)\s+/i,
+    // 2. Глаголы движения
+    /(?:курсом|прямує|прямують|летить|летять|рухається|рухаються|йде|йдуть|направляється|направляються|трима[єю]ть?\s+курс|взяв\s+курс|у\s+напрямку|в\s+напрямку|рушив|рушили|вилетів|вилетіли|заходить|заходять|зайшов|зайшли|вийшов|вийшли|наближається|наближаються|просувається|просуваються|залітає|залітають|пройшов|пройшли|входить|входять|увійшов|увійшли)\s+(?:на|до|в|у|по|через|над)\s+/i,
+    // 3. «Шахед на Київ»
+    /(?:шахед|шахеди|герань|гербера|бпла|дрон|дрони|ракет[аиуы]|крилат[аоі]|баліст[иі]к[аиу]|ціль|цілі|група|групи)\s+(?:на|до|в|у|по|через|над)\s+/i,
+    // 4. Короткие «курс на X», «рух на X»
+    /(?:курс|рух|напрямок|напрям)\s+[^,.!?]{0,25}?(?:на|до|в|у)\s+/i,
+    // 5. «над X», «через X» + локация (для транзитных целей)
+    /(?:летить|пролітає|пролітають|рухається)\s+над\s+/i,
+];
+
+function hasMovement(text) {
+    if (!text) return false;
+    const norm = normalizeName(text);
+    return MOVEMENT_PATTERNS.some(re => re.test(norm));
+}
+
+function parseTarget(text) {
+    if (!text) return null;
+    const norm = normalizeName(text);
+    if (!hasMovement(norm)) return null;
+    const places = findPlaces(text);
+    if (places.length === 0) return null;
+
+    let fromPoint = null, toPoint = null;
+    const mFromTo = norm.match(/(?:^|\s)(?:з|із|из|с|от|від)\s+([^,.!?]{2,40}?)\s+(?:на|до|в|у|по|через)\s+([^,.!?]{2,40})/);
+    if (mFromTo) {
+        const fromText = mFromTo[1], toText = mFromTo[2];
+        for (const p of places) {
+            const lbl = normalizeName(p.label);
+            if (!fromPoint && fromText.includes(lbl)) fromPoint = p;
+            if (!toPoint   && toText.includes(lbl))   toPoint   = p;
+        }
+    }
+
+    let route = [], routeConfidence = 'low';
+    if (fromPoint && toPoint && fromPoint.label !== toPoint.label) {
+        route = [fromPoint, toPoint]; routeConfidence = 'high';
+    } else if (places.length === 1) {
+        route = [places[0]]; routeConfidence = 'medium';
+    } else if (places.length > 1) {
+        route = places.slice(0, 3); routeConfidence = 'low';
+    } else return null;
+
+    return {
+        category: detectCategory(text),
+        explicitId: extractDroneId(text),
+        route, fromPoint, routeConfidence,
+        sourceText: text,
+    };
+}
+
+// ============ ПАРСЕР СОБЫТИЙ ============
+function parseEvents(text) {
+    if (!text) return [];
+    const rawParts = text.split(/[▪️•●·\n;]+/).map(s => s.trim()).filter(s => s.length > 3);
+    const events = [];
+    for (const part of rawParts) {
+        const types = detectEventTypes(part);
+        if (types.length === 0) continue;
+        const places = findPlaces(part);
+        if (places.length === 0) continue;
+        const place = places[0];
+        for (const type of types) {
+            events.push({ type, lat: place.lat, lng: place.lng, place: place.label, sourceText: part });
+        }
+    }
+    return events;
+}
+
+// ============ ЗАГРУЗКА ============
+async function fetchChannelHtml(channel) {
+    const target = `https://t.me/s/${channel}`;
+    let lastErr = null;
+    for (let i = 0; i < CORS_PROXIES.length; i++) {
+        try {
+            const url = CORS_PROXIES[i](target);
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+            const r = await fetch(url, { signal: controller.signal });
+            clearTimeout(timeout);
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            let text = await r.text();
+            // allorigins/get возвращает JSON {contents: "..."}
+            if (text.trim().startsWith('{')) {
+                try { const j = JSON.parse(text); if (j.contents) text = j.contents; } catch (e) {}
+            }
+            if (!text || text.length < 500) throw new Error('Пустой ответ');
+            if (!text.includes('tgme_widget_message')) throw new Error('Не HTML канала');
+            return text;
+        } catch (e) { lastErr = e; }
+    }
+    throw new Error('Все прокси недоступны: ' + (lastErr ? lastErr.message : '?'));
+}
+
+function parseChannelMessages(html) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const posts = doc.querySelectorAll('.tgme_widget_message_wrap');
+    const messages = [];
+    posts.forEach((post, i) => {
+        if (i < posts.length - MESSAGES_TO_SCAN) return;
+        const textEl = post.querySelector('.tgme_widget_message_text');
+        const timeEl = post.querySelector('.tgme_widget_message_date time');
+        const text = textEl ? textEl.innerText.trim() : '';
+        const time = timeEl ? timeEl.getAttribute('datetime') : null;
+        if (text) messages.push({ text, time });
+    });
+    return messages;
+}
+
+// ============ СОСТОЯНИЕ ============
+let state = {
+    targets: {}, events: [], lastPoll: null, lastError: null,
+    counters: {}, activeTab: 'targets',
+    lastSeenTime: {},   // channel -> ISO время последнего обработанного сообщения
+    lastChannelOk: 0,   // сколько каналов удалось в последнем цикле
+};
+let history = {};
+
+function loadState() {
+    try {
+        const raw = localStorage.getItem('monitor_v10');
+        if (raw) state = Object.assign(state, JSON.parse(raw));
+        if (!state.targets)      state.targets = {};
+        if (!state.events)       state.events = [];
+        if (!state.counters)     state.counters = {};
+        if (!state.lastSeenTime) state.lastSeenTime = {};
+    } catch (e) {}
+}
+function saveState() { try { localStorage.setItem('monitor_v10', JSON.stringify(state)); } catch (e) {} }
+function loadHistory() {
+    try { const raw = localStorage.getItem('monitor_history_v10'); if (raw) history = JSON.parse(raw); }
+    catch (e) { history = {}; }
+}
+function saveHistory() { try { localStorage.setItem('monitor_history_v10', JSON.stringify(history)); } catch (e) {} }
+function appendHistory(id, entry) {
+    if (!history[id]) history[id] = [];
+    history[id].push(entry);
+    if (history[id].length > HISTORY_LIMIT) history[id] = history[id].slice(-HISTORY_LIMIT);
+    saveHistory();
+}
+function pruneTargets() {
+    const now = Date.now();
+    let changed = false;
+    for (const [id, t] of Object.entries(state.targets)) {
+        if (now - new Date(t.timestamp).getTime() > TARGET_RESET_MS) { delete state.targets[id]; changed = true; }
+    }
+    if (changed) saveState();
+}
+function pruneEvents() {
+    const now = Date.now();
+    const before = state.events.length;
+    state.events = state.events.filter(ev => now - new Date(ev.timestamp).getTime() < EVENT_TTL_MS);
+    if (state.events.length !== before) saveState();
+}
+function isEventActive(ev) {
+    return Date.now() - new Date(ev.timestamp).getTime() < EVENT_ACTIVE_MS;
+}
+function findTargetToMerge(route, category, fromPoint, timestamp) {
+    const now = new Date(timestamp).getTime();
+    if (fromPoint) {
+        for (const [id, t] of Object.entries(state.targets)) {
+            if (t.category !== category) continue;
+            const last = t.route[t.route.length - 1];
+            if (distanceKm(last, fromPoint) < 1.5) return id;
+        }
+    }
+    let best = null, bestDist = Infinity;
+    for (const [id, t] of Object.entries(state.targets)) {
+        if (t.category !== category) continue;
+        if (now - new Date(t.timestamp).getTime() > MERGE_WINDOW_MS) continue;
+        const last = t.route[t.route.length - 1];
+        const d = distanceKm(last, route[0]);
+        if (d < MERGE_RADIUS_KM && d < bestDist) { best = id; bestDist = d; }
+    }
+    return best;
+}
+function nextId(prefix) {
+    state.counters[prefix] = (state.counters[prefix] || 0) + 1;
+    return `${prefix}-${state.counters[prefix]}`;
+}
+function eventKey(ev) {
+    const lat = ev.lat.toFixed(3), lng = ev.lng.toFixed(3);
+    const min = Math.floor(new Date(ev.timestamp).getTime() / 60000);
+    const txt = (ev.sourceText || '').slice(0, 40).replace(/\s+/g, ' ');
+    return `${ev.type}|${lat}|${lng}|${min}|${txt}`;
+}
+function addEvent(ev, timestamp, channel) {
+    const key = eventKey({ ...ev, timestamp });
+    for (const existing of state.events) if (eventKey(existing) === key) return;
+    state.events.push({ ...ev, timestamp, channel, id: nextId('ev') });
+}
+
+// ============ ОБРАБОТКА СООБЩЕНИЙ ============
+function processMessages(messages, channel) {
+    if (!messages || messages.length === 0) return;
+    const lastSeen = state.lastSeenTime[channel] || null;
+    // От старых к новым, но пропускаем уже обработанные
+    let newestTime = lastSeen;
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        const timestamp = msg.time || new Date().toISOString();
+        if (lastSeen && msg.time && msg.time <= lastSeen) continue;
+        if (!newestTime || (msg.time && msg.time > newestTime)) newestTime = msg.time;
+
+        const target = parseTarget(msg.text);
+        if (target) {
+            let targetId = target.explicitId;
+            let existing = targetId ? state.targets[targetId] : null;
+            if (!existing) {
+                const mergedId = findTargetToMerge(target.route, target.category, target.fromPoint, timestamp);
+                if (mergedId) { targetId = mergedId; existing = state.targets[mergedId]; }
+            }
+            if (!targetId) targetId = nextId(target.category);
+
+            let newRoute;
+            if (existing && existing.route.length > 0) {
+                const lastOld = existing.route[existing.route.length - 1];
+                if (distanceKm(lastOld, target.route[0]) < 1.5) newRoute = [...existing.route, ...target.route.slice(1)];
+                else newRoute = [...existing.route, ...target.route];
+            } else newRoute = [...target.route];
+
+            const unchanged = existing && existing.timestamp === timestamp && existing.route.length === newRoute.length;
+            if (!unchanged) {
+                state.targets[targetId] = {
+                    id: targetId, category: target.category,
+                    explicitId: target.explicitId || null,
+                    route: newRoute, timestamp,
+                    routeConfidence: target.routeConfidence,
+                    sourceText: target.sourceText, channel,
+                };
+                appendHistory(targetId, {
+                    timestamp, category: target.category,
+                    route: newRoute, sourceText: target.sourceText, channel,
+                });
+            }
+        }
+
+        for (const ev of parseEvents(msg.text)) addEvent(ev, timestamp, channel);
+    }
+    if (newestTime && newestTime !== lastSeen) {
+        state.lastSeenTime[channel] = newestTime;
+    }
+}
+
+// ============ ОСНОВНОЙ ЦИКЛ ============
+let isPolling = false;
+async function pollAllChannels(manual = false) {
+    if (isPolling) { if (manual) showStatus('Уже обновляется...'); return; }
+    isPolling = true;
+    if (manual) showStatus('Обновление...', 2000);
+
+    const allChannels = [...PRIORITY_CHANNELS, ...CHANNELS];
+    const queue = allChannels.slice();
+    let fetchedCount = 0, lastErr = null;
+
+    const workers = Array.from({ length: PARALLEL_WORKERS }, async () => {
+        while (queue.length) {
+            const channel = queue.shift();
+            try {
+                const html = await fetchChannelHtml(channel);
+                const messages = parseChannelMessages(html);
+                processMessages(messages, channel);
+                fetchedCount++;
+            } catch (e) { lastErr = e.message; }
+        }
+    });
+    await Promise.all(workers);
+
+    if (fetchedCount > 0) {
+        state.lastPoll = new Date().toISOString();
+        state.lastError = null;
+    } else {
+        state.lastError = lastErr || 'Нет данных';
+    }
+    state.lastChannelOk = fetchedCount;
+    saveState();
+    pruneTargets();
+    pruneEvents();
+    renderAll();
+    updateMeta();
+    if (manual) {
+        if (fetchedCount > 0) showStatus(`✅ Обновлено (${fetchedCount}/${allChannels.length})`);
+        else showStatus('⚠️ Ни одного канала не удалось прочитать', 4000, true);
+    }
+    isPolling = false;
+}
+
+function updateMeta() {
+    const meta = document.getElementById('panelMeta');
+    if (state.lastError && !state.lastPoll) {
+        meta.textContent = '⚠️ ' + state.lastError;
+        meta.style.color = '#ff8888';
+        return;
+    }
+    if (!state.lastPoll) {
+        meta.textContent = 'Обновляется…';
+        meta.style.color = '#bbb';
+        return;
+    }
+    const d = new Date(state.lastPoll);
+    const hhmmss = formatHHMMSS(d);
+    const age = Date.now() - d.getTime();
+    if (age > 120_000) {
+        meta.textContent = `⚠️ Данные устарели (последнее обновление ${hhmmss})`;
+        meta.style.color = '#ffaa44';
+    } else {
+        const chOk = state.lastChannelOk || 0;
+        const chTotal = PRIORITY_CHANNELS.length + CHANNELS.length;
+        meta.textContent = `Обновлено: ${hhmmss} · каналов ${chOk}/${chTotal}`;
+        meta.style.color = '#bbb';
+    }
+}
+
+// ============ КАРТА ============
+const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([50.4501, 30.5234], 11);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+function colorFor(cat) { return (CATEGORIES[cat] || CATEGORIES.unknown).color; }
+
+function makeTargetSvg(category, color) {
+    if (category === 'drone')
+        return `<svg width="34" height="34" viewBox="0 0 34 34"><polygon points="17,2 26,26 17,20 8,26" fill="${color}" stroke="#000" stroke-width="1.5"/></svg>`;
+    if (category === 'jet_drone')
+        return `<svg width="34" height="34" viewBox="0 0 34 34"><polygon points="17,2 26,26 17,20 8,26" fill="${color}" stroke="#000" stroke-width="1.5"/><circle cx="17" cy="14" r="2.2" fill="#fff" stroke="#000" stroke-width="0.5"/></svg>`;
+    if (category === 'cruise')
+        return `<svg width="34" height="34" viewBox="0 0 34 34"><polygon points="17,2 22,12 32,16 22,20 17,32 12,20 2,16 12,12" fill="${color}" stroke="#000" stroke-width="1.5"/></svg>`;
+    if (category === 'ballistic')
+        return `<svg width="34" height="34" viewBox="0 0 34 34"><polygon points="17,2 25,22 17,18 9,22" fill="${color}" stroke="#000" stroke-width="1.5"/><rect x="15" y="22" width="4" height="8" fill="${color}"/></svg>`;
+    return `<svg width="28" height="28" viewBox="0 0 28 28"><ellipse cx="14" cy="16" rx="13" ry="4.8" fill="${color}" stroke="#000" stroke-width="1"/><ellipse cx="14" cy="12.5" rx="7" ry="4" fill="${color}" stroke="#000" stroke-width="1" opacity="0.9"/><circle cx="7.5" cy="16" r="1.4" fill="#fff" stroke="#000" stroke-width="0.3"/><circle cx="14" cy="17" r="1.4" fill="#fff" stroke="#000" stroke-width="0.3"/><circle cx="20.5" cy="16" r="1.4" fill="#fff" stroke="#000" stroke-width="0.3"/></svg>`;
+}
+
+function makeTargetIcon(id, category, confidence) {
+    const color = colorFor(category);
+    const cat = CATEGORIES[category] || CATEGORIES.unknown;
+    const confMark = confidence === 'low' ? ' ~' : '';
+    if (category === 'unknown') {
+        return L.divIcon({
+            className: 'target-icon',
+            html:
+                `<div style="position:relative;width:28px;height:38px;">` +
+                    `<div class="arrow-wrap" style="position:absolute;left:50%;top:-10px;transform:translateX(-50%) rotate(0deg);transform-origin:50% 100%;will-change:transform;">` +
+                        `<svg width="14" height="22" viewBox="0 0 14 22"><polygon points="7,0 13,14 9.5,14 9.5,22 4.5,22 4.5,14 1,14" fill="${color}" stroke="#000" stroke-width="1"/></svg>` +
+                    `</div>` +
+                    `<div class="svg-wrap" style="position:absolute;left:0;bottom:0;">${makeTargetSvg(category, color)}</div>` +
+                `</div>` +
+                `<div class="label">${escapeHtml(id)}${confMark}</div>`,
+            iconSize: [50, 64], iconAnchor: [25, 50]
+        });
+    }
+    return L.divIcon({
+        className: 'target-icon',
+        html:
+            `<div class="svg-wrap" style="transform: rotate(0deg); transform-origin: 50% 50%; will-change: transform;">${makeTargetSvg(category, color)}</div>` +
+            `<div class="label">${escapeHtml(id)}${confMark}<span style="font-size:9px;opacity:.9"> · ${cat.label}</span></div>`,
+        iconSize: [60, 56], iconAnchor: [30, 28]
+    });
+}
+
+function makeEventIcon(type, active) {
+    const def = EVENT_TYPES[type] || EVENT_TYPES.impact;
+    return L.divIcon({
+        className: 'event-icon' + (active ? '' : ' archived'),
+        html: `<div class="emoji">${def.emoji}</div><div class="label">${def.label}</div>`,
+        iconSize: [44, 44], iconAnchor: [22, 32]
+    });
+}
+
+function setIconRotation(marker, angleDeg) {
+    if (!marker || !marker.getElement) return;
+    const el = marker.getElement(); if (!el) return;
+    const wrap = el.querySelector('.svg-wrap');
+    if (wrap) wrap.style.transform = `rotate(${angleDeg}deg)`;
+}
+function setArrowRotation(marker, angleDeg) {
+    if (!marker || !marker.getElement) return;
+    const el = marker.getElement(); if (!el) return;
+    const wrap = el.querySelector('.arrow-wrap');
+    if (wrap) wrap.style.transform = `translateX(-50%) rotate(${angleDeg}deg)`;
+}
+function updateIconAngle(route, marker, category) {
+    if (!marker || !route || route.length < 2) {
+        if (category === 'unknown') setArrowRotation(marker, 0);
+        else setIconRotation(marker, 0);
+        return;
+    }
+    const from = route[route.length - 2], to = route[route.length - 1];
+    const angle = bearing(from, to);
+    if (category === 'unknown') setArrowRotation(marker, angle);
+    else setIconRotation(marker, angle);
+}
+
+const activeTargets = {}, activeEvents = {};
+
+function openTargetHistory(id, latlng) {
+    const items = (history[id] || []).slice().reverse();
+    let html = '<div class="history-popup">';
+    html += '<div style="font-weight:700;margin-bottom:6px">📜 ' + escapeHtml(id) + '</div>';
+    if (items.length === 0) html += '<div class="empty">История пуста</div>';
+    else {
+        for (const h of items) {
+            const cat = (CATEGORIES[h.category] || CATEGORIES.unknown).label;
+            const route = (h.route || []).map(p => escapeHtml(p.label)).join(' → ');
+            const src = h.sourceText ? escapeHtml(h.sourceText.slice(0, 140)) : '';
+            html += `<div class="entry"><div class="time">${formatTime(h.timestamp)} · ${cat}</div><div class="route">${route}</div>` +
+                    (src ? `<div class="src">«${src}»</div>` : '') + '</div>';
+        }
+    }
+    html += '</div>';
+    L.popup({ maxWidth: 320, minWidth: 260, autoPan: true }).setLatLng(latlng).setContent(html).openOn(map);
+}
+function openEventPopup(ev, latlng) {
+    const def = EVENT_TYPES[ev.type] || EVENT_TYPES.impact;
+    const html =
+        `<div class="history-popup">` +
+        `<div style="font-weight:700;margin-bottom:6px;color:${def.color}">${def.emoji} ${def.label}</div>` +
+        `<div class="time">${formatTime(ev.timestamp)} · ${escapeHtml(ev.place || '')}</div>` +
+        `<div class="src">«${escapeHtml(ev.sourceText || '')}»</div>` +
+        `</div>`;
+    L.popup({ maxWidth: 300, minWidth: 240, autoPan: true }).setLatLng(latlng).setContent(html).openOn(map);
+}
+
+function renderTarget(t) {
+    const existing = activeTargets[t.id];
+    if (existing && existing.lastTimestamp === t.timestamp && existing.lastRouteLength === t.route.length) return;
+    if (existing) {
+        if (existing.marker)   map.removeLayer(existing.marker);
+        if (existing.polyline) map.removeLayer(existing.polyline);
+        if (existing.arrow)    map.removeLayer(existing.arrow);
+        if (existing.angleTimer) clearInterval(existing.angleTimer);
+        delete activeTargets[t.id];
+    }
+    const points = t.route;
+    if (!points || points.length === 0) return;
+
+    const color = colorFor(t.category);
+    const cat = CATEGORIES[t.category] || CATEGORIES.unknown;
+    const icon = makeTargetIcon(t.id, t.category, t.routeConfidence);
+    const lastPoint = points[points.length - 1];
+    const lastLatLng = [lastPoint.lat, lastPoint.lng];
+
+    let marker;
+    if (points.length === 1 || t.category === 'unknown') {
+        marker = L.marker(lastLatLng, { icon, zIndexOffset: 1000 }).addTo(map);
+    } else {
+        const latlngs = points.map(p => [p.lat, p.lng]);
+        try {
+            marker = L.markerMotion(latlngs, cat.speedKmh, { icon, rotation: false, autoplay: true, loop: false }).addTo(map);
+        } catch (e) {
+            marker = L.marker(lastLatLng, { icon, zIndexOffset: 1000 }).addTo(map);
+        }
+    }
+    marker.on('click', () => openTargetHistory(t.id, marker.getLatLng()));
+    setTimeout(() => updateIconAngle(points, marker, t.category), 30);
+    if (marker.on) marker.on('motion.end', () => updateIconAngle(points, marker, t.category));
+    const angleTimer = setInterval(() => {
+        if (!map.hasLayer(marker)) { clearInterval(angleTimer); return; }
+        updateIconAngle(points, marker, t.category);
+    }, 400);
+
+    let polyline = null;
+    if (points.length > 1 && t.category !== 'unknown') {
+        const latlngs = points.map(p => [p.lat, p.lng]);
+        polyline = L.polyline(latlngs, {
+            color: '#ff2d2d', weight: 1.5,
+            dashArray: t.routeConfidence === 'low' ? '2,10' : '4,8',
+            opacity:   t.routeConfidence === 'low' ? 0.55 : 0.9,
+            interactive: false,
+        }).addTo(map);
+    }
+
+    let arrowMarker = null;
+    if (points.length > 1) {
+        const prevPoint = points[points.length - 2];
+        const angle = bearing(prevPoint, lastPoint);
+        const arrowIcon = L.divIcon({
+            className: 'route-arrow',
+            html: `<div style="transform:rotate(${angle}deg);transform-origin:50% 50%;"><svg width="20" height="20" viewBox="0 0 20 20"><polygon points="10,0 16,16 10,12 4,16" fill="${color}" stroke="#000" stroke-width="1"/></svg></div>`,
+            iconSize: [20, 20], iconAnchor: [10, 10],
+        });
+        arrowMarker = L.marker(lastLatLng, { icon: arrowIcon, interactive: false, zIndexOffset: 999 }).addTo(map);
+    }
+
+    activeTargets[t.id] = { marker, polyline, arrow: arrowMarker, lastTimestamp: t.timestamp, lastRouteLength: points.length, angleTimer };
+
+    if (Object.keys(activeTargets).length === 1) {
+        try {
+            if (polyline) map.fitBounds(polyline.getBounds(), { padding: [60, 60] });
+            else map.setView(lastLatLng, 12);
+        } catch (e) {}
+    }
+}
+
+function renderEvent(ev, forceShow) {
+    const active = isEventActive(ev);
+    if (!active && !forceShow) {
+        if (activeEvents[ev.id]) { map.removeLayer(activeEvents[ev.id]); delete activeEvents[ev.id]; }
+        return;
+    }
+    if (activeEvents[ev.id]) return;
+    const icon = makeEventIcon(ev.type, active);
+    const m = L.marker([ev.lat, ev.lng], { icon, opacity: active ? 1 : 0.6, zIndexOffset: active ? 500 : 0 }).addTo(map);
+    m.on('click', () => openEventPopup(ev, m.getLatLng()));
+    activeEvents[ev.id] = m;
+}
+
+function removeStaleTargets(currentIds) {
+    for (const id of Object.keys(activeTargets)) {
+        if (!currentIds.includes(id)) {
+            const t = activeTargets[id];
+            if (t.marker)   map.removeLayer(t.marker);
+            if (t.polyline) map.removeLayer(t.polyline);
+            if (t.arrow)    map.removeLayer(t.arrow);
+            if (t.angleTimer) clearInterval(t.angleTimer);
+            delete activeTargets[id];
+        }
+    }
+}
+
+function renderAll() {
+    const targets = Object.values(state.targets);
+    removeStaleTargets(targets.map(t => t.id));
+    for (const t of targets) renderTarget(t);
+    const forceShowArchive = state.activeTab === 'archive';
+    const evIds = new Set();
+    for (const ev of state.events) {
+        const active = isEventActive(ev);
+        if (active || forceShowArchive) { renderEvent(ev, forceShowArchive); evIds.add(ev.id); }
+    }
+    for (const id of Object.keys(activeEvents)) {
+        if (!evIds.has(id)) { map.removeLayer(activeEvents[id]); delete activeEvents[id]; }
+    }
+    updatePanel();
+}
+
+function updatePanel() {
+    const title = document.getElementById('panelTitle');
+    const list = document.getElementById('list');
+    const tab = state.activeTab;
+    if (tab === 'targets') {
+        const targets = Object.values(state.targets);
+        title.textContent = targets.length ? `🎯 Цели: ${targets.length}` : '🎯 Нет активных целей';
+        list.innerHTML = targets.map(t => {
+            const color = colorFor(t.category);
+            const catLabel = (CATEGORIES[t.category] || CATEGORIES.unknown).label;
+            const routeStr = (t.route || []).map(p => escapeHtml(p.label)).join(' → ');
+            const conf = t.routeConfidence === 'low' ? ' ~' : '';
+            return `<div class="row"><span class="dot" style="background:${color};color:${color}"></span>
+                <div class="row-text"><div class="row-title" style="color:${color}">${escapeHtml(t.id)}${conf} <span style="font-size:10px;opacity:.75;color:#fff">${catLabel}</span></div>
+                <div class="row-sub">${routeStr}</div></div></div>`;
+        }).join('');
+    } else if (tab === 'events') {
+        const events = state.events.filter(isEventActive);
+        title.textContent = events.length ? `💥 События: ${events.length}` : '💥 Нет активных событий';
+        list.innerHTML = events.slice().reverse().map(ev => {
+            const def = EVENT_TYPES[ev.type] || EVENT_TYPES.impact;
+            return `<div class="row"><span class="dot" style="background:${def.color};color:${def.color}"></span>
+                <div class="row-text"><div class="row-title" style="color:${def.color}">${def.emoji} ${def.label}</div>
+                <div class="row-sub">${escapeHtml(ev.place || '')} · ${formatTime(ev.timestamp)}</div></div></div>`;
+        }).join('');
+    } else {
+        const archived = state.events.filter(ev => !isEventActive(ev));
+        title.textContent = `📦 Архив: ${archived.length}`;
+        list.innerHTML = archived.slice().reverse().map(ev => {
+            const def = EVENT_TYPES[ev.type] || EVENT_TYPES.impact;
+            return `<div class="row"><span class="dot" style="background:#666"></span>
+                <div class="row-text"><div class="row-title" style="color:#ccc">${def.emoji} ${def.label}</div>
+                <div class="row-sub">${escapeHtml(ev.place || '')} · ${formatTime(ev.timestamp)}</div></div></div>`;
+        }).join('');
+    }
+}
+
+// ============ UI ============
+const panel = document.getElementById('panel');
+const toggleBtn = document.getElementById('toggleBtn');
+const refreshBtn = document.getElementById('refreshBtn');
+
+toggleBtn.addEventListener('click', () => {
+    const collapsed = panel.classList.toggle('collapsed');
+    toggleBtn.textContent = collapsed ? 'Открыть' : 'Свернуть';
+});
+
+refreshBtn.addEventListener('click', () => {
+    refreshBtn.classList.add('spinning');
+    pollAllChannels(true).finally(() => {
+        setTimeout(() => refreshBtn.classList.remove('spinning'), 600);
+    });
+});
+
+document.getElementById('tabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('.tab');
+    if (!btn) return;
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    state.activeTab = btn.dataset.tab;
+    saveState();
+    renderAll();
+});
+
+// ============ СТАРТ ============
+loadState();
+loadHistory();
+renderAll();
+updateMeta();
+pollAllChannels(false);
+setInterval(() => pollAllChannels(false), POLL_INTERVAL_MS);
+setInterval(() => { pruneTargets(); pruneEvents(); renderAll(); updateMeta(); }, 60_000);
+showStatus('Загрузка данных...');
+
+// Отладка
+window.__debugPlaces = (text) => findPlaces(text);
+window.__debugTarget = (text) => parseTarget(text);
+window.__state       = () => state;
+</script>
+</body>
+</html>
